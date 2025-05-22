@@ -1,0 +1,137 @@
+#include <iostream>
+#include <vector>
+#include <map>
+#include <cmath>
+#include <limits>
+#include <ctime>
+#include <iomanip>
+#include <fstream>
+
+#define M_PI 3.14
+#define ERS 0.001
+
+class LCG {
+protected:
+    unsigned seed;
+    unsigned a;
+    unsigned c;
+public:
+    LCG(unsigned seed = static_cast<unsigned>(time(nullptr)),
+        unsigned factor = 1664525u,
+        unsigned increment = 1013904223u);
+
+    double next();
+    std::vector<double> generate_sequence(std::size_t n);
+    void print(const std::vector<double>& samples);
+};
+
+void LCG::print(const std::vector<double>& samples) {
+    for (auto s : samples) std::cout << s << " ";
+    std::cout << std::endl;
+}
+
+LCG::LCG(unsigned seed,
+    unsigned factor,
+    unsigned increment)
+    : seed(seed), a(factor), c(increment)
+{
+};
+
+double LCG::next() {
+    seed = a * seed + c;
+    return double(seed) / (4294967296.0);
+}
+
+std::vector<double> LCG::generate_sequence(std::size_t n) {
+    std::vector<double> seq;
+    seq.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        seq.push_back(next());
+    }
+    return seq;
+}
+
+class RandomGenerator {
+protected:
+    LCG* lcg;
+public:
+    RandomGenerator() : lcg(nullptr) {}
+    RandomGenerator(LCG& lcg) : lcg(&lcg) {}
+    ~RandomGenerator() = default;
+
+    void getLCG(LCG* lcgObj) {
+        lcg = lcgObj;
+    }
+
+    std::vector<double> uniform_random_variable(double a, double b, size_t size = 1) {
+        std::vector<double> sample;
+        sample.reserve(size);
+        for (std::size_t i = 0; i < size; ++i) {
+            double u = lcg->next();
+            sample.push_back(a + (b - a) * u);
+        }
+        return sample;
+    }
+};
+
+int main() {
+    setlocale(LC_ALL, "Russian");
+    unsigned seed;
+
+    // Модифицированная логика ввода seed
+    while (true) {
+        std::cout << "Введите начальное значение (-1 для автоматической генерации): ";
+        if (std::cin >> seed) break;
+
+        std::cout << "Ошибка ввода! Введите целое число.\n";
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+
+    if (seed == -1) {
+        seed = static_cast<unsigned>(time(nullptr));
+        std::cout << "Сгенерирован случайный seed: " << seed << "\n";
+    }
+
+    LCG lcg(seed);
+    RandomGenerator gen(lcg);
+
+    // Генерация и анализ данных
+    std::vector<double> sample = gen.uniform_random_variable(0.0, 1.0, 9000);
+    std::ofstream fout("data.txt");
+    for (int c = 0; c < 3; c++) {
+        std::cout << "\nРезультаты распределения (";
+        switch (c) {
+        case 0:
+            std::cout << "первые";
+            break;
+        case 1:
+            std::cout << "вторые";
+            break;
+        case 2:
+            std::cout << "третьи";
+            break;
+        }
+        std::cout<<" 3000 значений):\n";
+        std::map<int, int> freq{};
+        for (size_t i = 0+c*3000; i < 3000+ c*3000; ++i) {
+            double bucket = std::floor(sample[i] * 100) / 100; // Группировка по 0.01
+            if (bucket <= 0.05)
+                freq[6]++;
+            else if (bucket <= 0.3)
+                freq[7]++;
+            else if (bucket <= 0.6)
+                freq[8]++;
+            else if (bucket <= 0.82)
+                freq[9]++;
+            else
+                freq[10]++;
+        }
+        for (const auto& el : freq) {
+            std::cout << std::setw(2)<<el.first << " - " << el.second << "   " << std::fixed << std::setprecision(4) << el.second / 3000.0 << " %" << std::endl;
+            fout << el.first <<'\t'<< el.second << std::endl;
+        }
+        std::cout << std::endl;
+    }
+    fout.close();
+}
