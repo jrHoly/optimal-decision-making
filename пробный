@@ -114,89 +114,6 @@ private:
     // CSV-файл
     ofstream csv_file;
 
-    // Добавлены объявления методов, которые были не видны
-    int generateDefectLoss();
-    double generateNormalDemand();
-    int generateDeliveryTime();
-
-public:
-    InventorySimulator(unsigned demand_seed, unsigned delivery_seed, unsigned defect_seed,
-        double init_capital, int init_inventory);
-
-    ~InventorySimulator();
-
-    void runSimulation(int days_to_simulate);
-};
-// Реализации методов вне класса
-int InventorySimulator::generateDefectLoss() {
-    if (inventory <= 0) return 0;
-    int batches = inventory / defect_per_units;
-    if (batches == 0) return 0;
-    int loss = defect_min_units + static_cast<int>((defect_max_units - defect_min_units) * defect_lcg.next());
-    return min(loss * batches, inventory);
-}
-
-double InventorySimulator::generateNormalDemand() {
-    if (hasSpareNormal) {
-        hasSpareNormal = false;
-        return mean_demand + stddev_demand * spareNormal;
-    }
-    // Реализации методов вне класса
-    int InventorySimulator::generateDefectLoss() {
-        if (inventory <= 0) return 0;
-        int batches = inventory / defect_per_units;
-        if (batches == 0) return 0;
-        int loss = defect_min_units + static_cast<int>((defect_max_units - defect_min_units) * defect_lcg.next());
-        return min(loss * batches, inventory);
-    }
-
-    double InventorySimulator::generateNormalDemand() {
-        if (hasSpareNormal) {
-            hasSpareNormal = false;
-            return mean_demand + stddev_demand * spareNormal;
-        }
-        int InventorySimulator::generateDeliveryTime() {
-            double r = delivery_lcg.next();
-            double cumulative = 0.0;
-            for (const auto& pair : delivery_time_dist) {
-                cumulative += pair.second;
-                if (r <= cumulative) {
-                    return pair.first;
-                }
-            }
-            return 10;
-        }
-
-
-        // Реализация конструктора
-        InventorySimulator::InventorySimulator(unsigned demand_seed, unsigned delivery_seed, unsigned defect_seed,
-            double init_capital, int init_inventory)
-            : demand_lcg(demand_seed), delivery_lcg(delivery_seed), defect_lcg(defect_seed),
-            current_date(Date::today()), capital(init_capital), inventory(init_inventory),
-            reorder_point(0), order_quantity(100) {
-
-            double lead_time_mean = 0.0;
-            for (const auto& pair : delivery_time_dist) {
-                lead_time_mean += pair.first * pair.second;
-            }
-            double safety_stock = 1.96 * stddev_demand * sqrt(lead_time_mean);
-            reorder_point = static_cast<int>(round(mean_demand * lead_time_mean + safety_stock * 1.15));
-
-            csv_file.open("inventory_simulation.csv");
-            if (!csv_file.is_open()) {
-                cerr << "Ошибка при создании CSV-файла!" << endl;
-            }
-            csv_file << "Дата,Спрос,Брак,Продажи,Дефицит,Запас,Капитал,Заказано,ДнейДоДоставки\n";
-        }
-
-        // Реализация деструктора
-        InventorySimulator::~InventorySimulator() {
-            if (csv_file.is_open()) {
-                csv_file.close();
-            }
-        }
-
-    // Реализация методов, которые были не видны
     int generateDefectLoss() {
         if (inventory <= 0) return 0;
 
@@ -240,10 +157,46 @@ double InventorySimulator::generateNormalDemand() {
         return 10;
     }
 
+public:
+    InventorySimulator(unsigned demand_seed, unsigned delivery_seed, unsigned defect_seed,
+        double init_capital, int init_inventory)
+        : demand_lcg(demand_seed), delivery_lcg(delivery_seed), defect_lcg(defect_seed),
+        current_date(Date::today()), capital(init_capital), inventory(init_inventory),
+        reorder_point(0), order_quantity(100) {
+
+        // Расчет параметров управления запасами
+        double annual_demand = mean_demand * 365;
+        double lead_time_mean = 0.0;
+        for (const auto& pair : delivery_time_dist) {
+            lead_time_mean += pair.first * pair.second;
+        }
+        double safety_stock = 1.96 * stddev_demand * sqrt(lead_time_mean);
+        reorder_point = static_cast<int>(round(mean_demand * lead_time_mean + safety_stock * 1.15));
+
+        // Открытие CSV-файла
+        csv_file.open("inventory_simulation.csv");
+        if (!csv_file.is_open()) {
+            cerr << "Ошибка при создании CSV-файла!" << endl;
+        }
+
+        // Заголовок CSV
+        csv_file << "Дата,Спрос,Брак,Продажи,Дефицит,Запас,Капитал,Заказано,ДнейДоДоставки\n";
+    }
+
+    ~InventorySimulator() {
+        if (csv_file.is_open()) {
+            csv_file.close();
+        }
+    }
+
+    // Реализация методов, которые были не вид
+
     void runSimulation(int days_to_simulate) {
         cout << "\nНачальная дата: " << current_date << endl;
         cout << "Начальный капитал: " << fixed << setprecision(2) << capital << " у.е." << endl;
         cout << "Начальный запас: " << inventory << " ед.\n" << endl;
+        cout << "День\tДата\t\tСпрос\tБрак\tПродажи\tДефицит\tЗапас\tКапитал\tЗаказано\tДоставка\n";
+        cout << "--------------------------------------------------------------------------------------------------\n";
 
         for (int day = 1; day <= days_to_simulate; ++day) {
             int demand = max(0, static_cast<int>(round(generateNormalDemand())));
