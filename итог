@@ -1,0 +1,358 @@
+#include <iostream>
+#include <vector>
+#include <map>
+#include <cmath>
+#include <limits>
+#include <ctime>
+#include <iomanip>
+#include <fstream>
+#include <random>
+#include <algorithm>
+#include <string>
+#include <sstream>
+
+#define _CRT_SECURE_NO_WARNINGS
+#define M_PI 3.14159265358979323846
+
+using namespace std;
+
+class Date {
+private:
+    int day, month, year;
+public:
+    Date(int d = 1, int m = 1, int y = 2000) : day(d), month(m), year(y) {}
+
+    static Date today() {
+        time_t now = time(nullptr);
+        tm local;
+        localtime_s(&local, &now);
+        return Date(local.tm_mday, local.tm_mon + 1, local.tm_year + 1900);
+    }
+
+    Date operator+(int days) const {
+        tm tm_date = { 0, 0, 0, day, month - 1, year - 1900 };
+        time_t time = mktime(&tm_date) + days * 86400;
+        tm new_tm;
+        localtime_s(&new_tm, &time);
+        return Date(new_tm.tm_mday, new_tm.tm_mon + 1, new_tm.tm_year + 1900);
+    }
+
+    string to_string() const {
+        char buffer[11];
+        snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d", year, month, day);
+        return string(buffer);
+    }
+
+    friend ostream& operator<<(ostream& os, const Date& dt) {
+        os << setw(2) << setfill('0') << dt.day << '.'
+            << setw(2) << setfill('0') << dt.month << '.' << dt.year;
+        return os;
+    }
+};
+
+class LCG {
+private:
+    unsigned seed;
+    unsigned a;
+    unsigned c;
+public:
+    LCG(unsigned seed = 1, unsigned factor = 1664525u, unsigned increment = 1013904223u)
+        : seed(seed), a(factor), c(increment) {
+    }
+
+    void setSeed(unsigned new_seed) {
+        seed = new_seed;
+    }
+
+    double next() {
+        seed = a * seed + c;
+        return double(seed) / (4294967296.0);
+    }
+};
+
+class InventorySimulator {
+private:
+    LCG demand_lcg;
+    LCG delivery_lcg;
+    LCG defect_lcg;
+
+    double mean_demand = 10.0;
+    double stddev_demand = 2.0;
+    int reorder_point;
+    int order_quantity;
+
+    map<int, double> delivery_time_dist = {
+        {6, 0.05}, {7, 0.25}, {8, 0.30}, {9, 0.22}, {10, 0.18}
+    };
+
+    double order_cost = 10.0;
+    double holding_cost = 1.0;
+    double shortage_cost = 1.0;
+    double profit_per_unit = 10.0;
+    int defect_min_units = 1;
+    int defect_max_units = 5;
+    int defect_per_units = 100;
+
+    bool hasSpareNormal = false;
+    double spareNormal = 0.0;
+
+    Date current_date;
+    double capital;
+    int inventory;
+    int on_order = 0;
+    int days_until_delivery = 0;
+    Date order_date;
+    int delivery_days = 0;
+
+    // Статистика
+    double total_holding_cost = 0.0;
+    double total_order_cost = 0.0;
+    double total_shortage_cost = 0.0;
+    int total_orders = 0;
+    int total_days = 0;
+
+    // CSV-файл
+    ofstream csv_file;
+
+    int generateDefectLoss() {
+        if (inventory <= 0) return 0;
+
+        int batches = inventory / defect_per_units;
+        if (batches == 0) return 0;
+
+        int loss = defect_min_units + static_cast<int>((defect_max_units - defect_min_units) * defect_lcg.next());
+        return min(loss * batches, inventory);
+    }
+
+    double generateNormalDemand() {
+        if (hasSpareNormal) {
+            hasSpareNormal = false;
+            return mean_demand + stddev_demand * spareNormal;
+        }
+
+        double u, v, s;
+        do {
+            u = 2.0 * demand_lcg.next() - 1.0;
+            v = 2.0 * demand_lcg.next() - 1.0;
+            s = u * u + v * v;
+        } while (s >= 1.0 || s == 0.0);
+
+        s = sqrt(-2.0 * log(s) / s);
+        spareNormal = v * s;
+        hasSpareNormal = true;
+
+        return mean_demand + stddev_demand * (u * s);
+    }
+
+    int generateDeliveryTime() {
+        double r = delivery_lcg.next();
+        double cumulative = 0.0;
+
+        for (const auto& pair : delivery_time_dist) {
+            cumulative += pair.second;
+            if (r <= cumulative) {
+                return pair.first;
+            }
+        }
+        return 10;
+    }
+
+public:
+    InventorySimulator(unsigned demand_seed, unsigned delivery_seed, unsigned defect_seed,
+        double init_capital, int init_inventory)
+        : demand_lcg(demand_seed), delivery_lcg(delivery_seed), defect_lcg(defect_seed),
+        current_date(Date::today()), capital(init_capital), inventory(init_inventory),
+        reorder_point(0), order_quantity(100) {
+
+        // Расчет параметров управления запасами
+        double annual_demand = mean_demand * 365;
+        double lead_time_mean = 0.0;
+        for (const auto& pair : delivery_time_dist) {
+            lead_time_mean += pair.first * pair.second;
+        }
+        double safety_stock = 1.96 * stddev_demand * sqrt(lead_time_mean);
+        reorder_point = static_cast<int>(round(mean_demand * lead_time_mean + safety_stock * 1.15));
+
+        // Открытие CSV-файла
+        csv_file.open("inventory_simulation.csv");
+        if (!csv_file.is_open()) {
+            cerr << "Ошибка при создании CSV-файла!" << endl;
+        }
+
+        // Заголовок CSV
+        csv_file << "Дата,Спрос,Брак,Продажи,Дефицит,Запас,Капитал,Заказано,ДнейДоДоставки\n";
+    }
+
+    ~InventorySimulator() {
+        if (csv_file.is_open()) {
+            csv_file.close();
+        }
+    }
+
+    // Реализация методов, которые были не вид
+
+    void runSimulation(int days_to_simulate) {
+        cout << "\nНачальная дата: " << current_date << endl;
+        cout << "Начальный капитал: " << fixed << setprecision(2) << capital << " у.е." << endl;
+        cout << "Начальный запас: " << inventory << " ед.\n" << endl;
+        cout << "День\tДата\t\tСпрос\tБрак\tПродажи\tДефицит\tЗапас\tКапитал\tЗаказано\tДоставка\n";
+        cout << "--------------------------------------------------------------------------------------------------\n";
+
+        for (int day = 1; day <= days_to_simulate; ++day) {
+            int demand = max(0, static_cast<int>(round(generateNormalDemand())));
+            int defect_loss = generateDefectLoss();
+            inventory = max(0, inventory - defect_loss);
+
+            int sales = min(demand, inventory);
+            int shortage = demand - sales;
+
+            double daily_profit = sales * profit_per_unit;
+            double daily_costs = shortage * shortage_cost + inventory * holding_cost;
+            inventory -= sales;
+            capital += daily_profit - daily_costs;
+
+            string order_status = "-";
+            string delivery_status = "-";
+
+            if (inventory <= reorder_point && on_order == 0) {
+                on_order = order_quantity;
+                delivery_days = generateDeliveryTime();
+                order_date = current_date;
+                capital -= order_cost;
+                order_status = to_string(order_quantity);
+                delivery_status = to_string(delivery_days);
+                total_orders++;
+                total_order_cost += order_cost;
+            }
+
+            if (delivery_days > 0) {
+                delivery_days--;
+                if (delivery_days == 0) {
+                    inventory += on_order;
+                    on_order = 0;
+                }
+            }
+
+            // Запись данных в CSV
+            if (csv_file.is_open()) {
+                csv_file << current_date.to_string() << ","
+                    << demand << ","
+                    << defect_loss << ","
+                    << sales << ","
+                    << shortage << ","
+                    << inventory << ","
+                    << fixed << setprecision(2) << capital << ","
+                    << (on_order > 0 ? "Да" : "Нет") << ","
+                    << (on_order > 0 ? delivery_days : 0) << "\n";
+            }
+
+            total_holding_cost += inventory * holding_cost;
+            total_shortage_cost += shortage * shortage_cost;
+            total_days++;
+
+            cout << day << "\t" << current_date << "\t"
+                << demand << "\t" << defect_loss << "\t"
+                << sales << "\t" << shortage << "\t"
+                << inventory << "\t" << fixed << setprecision(2) << capital << "\t"
+                << order_status << "\t\t"
+                << delivery_status << endl;
+
+            current_date = current_date + 1;
+
+            if (capital < 0) {
+                cout << "\n! БАНКРОТСТВО ! Капитал исчерпан на день " << day << endl;
+                break;
+            }
+        }
+
+        double avg_daily_cost = (total_holding_cost + total_order_cost + total_shortage_cost) / total_days;
+        cout << "\n--- ИТОГОВАЯ СТАТИСТИКА ---" << endl;
+        cout << "Обработано дней: " << total_days << endl;
+        cout << "Средние дневные расходы: " << fixed << setprecision(2) << avg_daily_cost << " у.е." << endl;
+        cout << " - Хранение: " << total_holding_cost << " у.е." << endl;
+        cout << " - Заказы: " << total_order_cost << " у.е. (" << total_orders << " заказов)" << endl;
+        cout << " - Дефицит: " << total_shortage_cost << " у.е." << endl;
+        cout << "Итоговый капитал: " << capital << " у.е." << endl;
+        cout << "Итоговый запас: " << inventory << " ед." << endl;
+    }
+};
+
+unsigned parseSeedInput(const string& input) {
+    if (input.empty() || input == " ") {
+        return static_cast<unsigned>(time(nullptr));
+    }
+    try {
+        return static_cast<unsigned>(stoull(input));
+    }
+    catch (...) {
+        return static_cast<unsigned>(time(nullptr));
+    }
+}
+
+double parseDoubleInput(const string& input, double default_value = 100.0) {
+    if (input.empty() || input == " ") {
+        return default_value;
+    }
+    try {
+        return stod(input);
+    }
+    catch (...) {
+        return default_value;
+    }
+}
+
+int parseIntInput(const string& input, int default_value = 100) {
+    if (input.empty() || input == " ") {
+        return default_value;
+    }
+    try {
+        return stoi(input);
+    }
+    catch (...) {
+        return default_value;
+    }
+}
+
+int main() {
+    setlocale(LC_ALL, "Russian");
+
+    int simulation_days;
+    cout << "Введите количество дней для симуляции: ";
+    while (!(cin >> simulation_days) || simulation_days <= 0) {
+        cout << "Ошибка ввода! Введите положительное число: ";
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    }
+
+    cin.ignore(); // Очистка буфера после предыдущего ввода
+
+    string input;
+    unsigned demand_seed, delivery_seed, defect_seed;
+    double init_capital;
+    int init_inventory;
+
+    cout << "Введите seed для генератора спроса (пробел для случайного): ";
+    getline(cin, input);
+    demand_seed = parseSeedInput(input);
+
+    cout << "Введите seed для генератора поставок (пробел для случайного): ";
+    getline(cin, input);
+    delivery_seed = parseSeedInput(input);
+
+    cout << "Введите seed для генератора брака (пробел для случайного): ";
+    getline(cin, input);
+    defect_seed = parseSeedInput(input);
+
+    cout << "Введите начальный капитал (пробел для 100 у.е.): ";
+    getline(cin, input);
+    init_capital = parseDoubleInput(input);
+
+    cout << "Введите начальный запас товара (пробел для 100 ед.): ";
+    getline(cin, input);
+    init_inventory = parseIntInput(input, 100);
+
+    InventorySimulator simulator(demand_seed, delivery_seed, defect_seed, init_capital, init_inventory);
+    simulator.runSimulation(simulation_days);
+
+    return 0;
+}
