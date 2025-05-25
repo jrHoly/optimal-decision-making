@@ -116,18 +116,9 @@ public:
         double init_capital, int init_inventory)
         : demand_lcg(demand_seed), delivery_lcg(delivery_seed), defect_lcg(defect_seed),
         current_date(Date::today()), capital(init_capital), inventory(init_inventory),
-        reorder_point(0), order_quantity(0) {
-        optimizeInventoryParameters();
-        cout << "Оптимальная точка восстановления (ROP): " << reorder_point << " ед.\n";
-        cout << "Оптимальный объем заказа (OQ): " << order_quantity << " ед.\n";
-    }
-
-    // Оптимизация параметров управления запасами
-    void optimizeInventoryParameters() {
+        reorder_point(0), order_quantity(100) {
         // Расчет EOQ (Economic Order Quantity)
         double annual_demand = mean_demand * 365;
-        double eoq = sqrt((2 * annual_demand * order_cost) / holding_cost);
-        order_quantity = static_cast<int>(round(eoq));
 
         // Расчет ROP (Reorder Point) с учетом страхового запаса
         double lead_time_mean = 0.0;
@@ -140,10 +131,14 @@ public:
 
         // Корректировка с учетом брака
         reorder_point = static_cast<int>(reorder_point * 1.15);
+        cout << "Оптимальная точка восстановления (ROP): " << reorder_point << " ед.\n";
+        //cout << "Оптимальный объем заказа (OQ): " << order_quantity << " ед.\n";
     }
 
+   
     int generateDefectLoss() {
         if (inventory <= 0) return 0;
+
 
         // Рассчитываем количество партий по 100 единиц
         int batches = inventory / defect_per_units;
@@ -203,7 +198,7 @@ public:
         cout << "Параметры управления запасами:" << endl;
         cout << " - Точка восстановления: " << reorder_point << " ед." << endl;
         cout << " - Объем заказа: " << order_quantity << " ед." << endl;
-        cout << " - Средний спрос: " << mean_demand << " ± " << stddev_demand << " ед./день\n" << endl;
+        cout << " - Средний спрос по нормальному закону MO = 10/СКО = 2\n"<< endl;
 
         cout << "День\tДата\t\tСпрос\tБрак\tПродажи\tДефицит\tЗапас\tКапитал\tЗаказано\tДоставка\n";
         cout << "--------------------------------------------------------------------------------------------------\n";
@@ -247,6 +242,7 @@ public:
             total_shortage_cost += shortage * shortage_cost;
             total_days++;
 
+
             cout << day << "\t" << current_date << "\t"
                 << demand << "\t" << defect_loss << "\t"
                 << sales << "\t" << shortage << "\t"
@@ -276,19 +272,19 @@ public:
 
 // Добавьте эти функции перед main()
 unsigned parseSeedInput(const string& input) {
-    if (input.empty()) {
+    if (input.empty() || input==" ") {
         return static_cast<unsigned>(time(nullptr));
     }
     try {
-        return static_cast<unsigned>(stoul(input));
+        return static_cast<unsigned>(stoull(input));
     }
     catch (...) {
         return static_cast<unsigned>(time(nullptr));
     }
 }
 
-double parseDoubleInput(const string& input, double default_value) {
-    if (input.empty()) {
+double parseDoubleInput(const string& input, double default_value = 100.0) {
+    if (input.empty() || input == " ") {
         return default_value;
     }
     try {
@@ -299,8 +295,8 @@ double parseDoubleInput(const string& input, double default_value) {
     }
 }
 
-int parseIntInput(const string& input, int default_value) {
-    if (input.empty()) {
+int parseIntInput(const string& input, int default_value=100.0) {
+    if (input.empty() || input==" ") {
         return default_value;
     }
     try {
@@ -343,7 +339,7 @@ int main() {
 
     cout << "Введите начальный капитал (пробел для 100 у.е.): ";
     getline(cin, input);
-    init_capital = parseDoubleInput(input, 100.0);
+    init_capital = parseDoubleInput(input);
 
     cout << "Введите начальный запас товара (пробел для 100 ед.): ";
     getline(cin, input);
