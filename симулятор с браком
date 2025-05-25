@@ -270,7 +270,6 @@ public:
     }
 };
 
-// Добавьте эти функции перед main()
 unsigned parseSeedInput(const string& input) {
     if (input.empty() || input==" ") {
         return static_cast<unsigned>(time(nullptr));
@@ -345,7 +344,6 @@ int main() {
     getline(cin, input);
     init_inventory = parseIntInput(input, 100);
 
-    // Исправленный вызов конструктора с 5 параметрами
     InventorySimulator simulator(demand_seed, delivery_seed, defect_seed, init_capital, init_inventory);
     simulator.runSimulation(simulation_days);
 
