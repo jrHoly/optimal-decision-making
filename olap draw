@@ -1,0 +1,232 @@
+import pandas as pd
+import os
+from google.colab import files
+from IPython.display import display
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm
+import time
+
+class InventoryAnalyzer:
+    def __init__(self, file_name, from_google_drive=False):
+        try:
+            start_time = time.time()
+            with tqdm(total=4, desc="Инициализация анализатора") as pbar:
+                if from_google_drive:
+                    from google.colab import drive
+                    drive.mount('/content/drive')
+                    file_path = f"/content/drive/My Drive/{file_name}"
+                    pbar.update(1)
+                else:
+                    uploaded_files = os.listdir('/content')
+                    print("\nДоступные файлы:", uploaded_files)
+                    pbar.update(1)
+
+                    if file_name not in uploaded_files:
+                        raise FileNotFoundError(f"Файл {file_name} не найден в /content")
+
+                    file_path = f"/content/{file_name}"
+                    pbar.update(1)
+
+                print(f"\nЗагрузка данных из: {file_path}")
+                self.data = pd.read_csv(file_path, encoding='windows-1251', delimiter=',')
+                print("\nДанные успешно загружены. Столбцы:", self.data.columns.tolist())
+                pbar.update(1)
+
+                self.data['Дата'] = pd.to_datetime(self.data['Дата'], errors='coerce', format='%Y-%m-%d')
+                pbar.update(1)
+
+                if self.data['Дата'].isna().any():
+                    na_count = self.data['Дата'].isna().sum()
+                    print(f"\nПредупреждение: {na_count} строк с некорректными датами удалены")
+                    self.data = self.data.dropna(subset=['Дата'])
+                
+                self.cube = None
+                self.dimensions = []
+                self.measures = []
+                self.prepare_data()
+                
+            print(f"\nИнициализация завершена за {time.time() - start_time:.2f} секунд")
+
+        except Exception as e:
+            print(f"\nОшибка при загрузке данных: {str(e)}")
+            raise
+
+    def prepare_data(self):
+        """Подготовка данных"""
+        with tqdm(total=6, desc="Подготовка данных") as pbar:
+            self.data['Месяц'] = self.data['Дата'].dt.month
+            pbar.update(1)
+            self.data['Квартал'] = self.data['Дата'].dt.quarter
+            pbar.update(1)
+            self.data['Год'] = self.data['Дата'].dt.year
+            pbar.update(1)
+            self.data['День_недели'] = self.data['Дата'].dt.dayofweek
+            pbar.update(1)
+
+            self.data['Прибыль'] = self.data['Продажи'] * 10
+            pbar.update(1)
+            self.data['Уровень_брака'] = self.data['Брак'] / (self.data['Спрос'] + 1)
+            self.data['Уровень_дефицита'] = self.data['Дефицит'] / (self.data['Спрос'] + 1)
+            pbar.update(1)
+
+            self.dimensions = ['Заказано', 'Месяц', 'Квартал', 'Год', 'День_недели']
+            self.measures = [
+                'Спрос', 'Брак', 'Продажи', 'Дефицит', 'Запас', 'Капитал',
+                'Прибыль', 'Уровень_брака', 'Уровень_дефицита'
+            ]
+
+    def create_cube(self, dimensions=None, measures=None, agg_funcs=None):
+        """Создание OLAP-куба с автоматической сортировкой"""
+        dimensions = dimensions or self.dimensions
+        measures = measures or self.measures
+        agg_funcs = agg_funcs or ['sum', 'mean']
+
+        with tqdm(total=3, desc="Создание куба") as pbar:
+            self.cube = self.data.groupby(dimensions)[measures].agg(agg_funcs)
+            pbar.update(1)
+            self.cube.columns = ['_'.join(col).strip() for col in self.cube.columns.values]
+            pbar.update(1)
+
+            # Сортировка по годам и кварталам
+            if 'Год' in dimensions and 'Квартал' in dimensions:
+                self.cube = self.cube.sort_values(by=['Год', 'Квартал'])
+            pbar.update(1)
+
+        print("\nКуб успешно создан. Доступные метрики:", self.cube.columns.tolist())
+        return self.cube
+
+    def visualize_sales(self):
+        """Визуализация продаж по кварталам"""
+        if self.cube is None:
+            print("Сначала создайте куб методом create_cube()")
+            return
+
+        with tqdm(total=1, desc="Визуализация данных"):
+            plt.figure(figsize=(12, 6))
+            self.cube['Продажи_sum'].unstack().plot(kind='bar')
+            plt.title('Динамика продаж по кварталам')
+            plt.ylabel('Суммарные продажи')
+            plt.xlabel('Год')
+            plt.xticks(rotation=0)
+            plt.grid(True)
+            plt.show()
+
+# Основной код выполнения ограничение точки запаса = 50, 150
+if __name__ == "__main__":
+    try:
+        # Настройки панды
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000)
+        pd.set_option('display.float_format', '{:.2f}'.format)
+
+        file_name = "inventory_simulation.csv"
+
+        print("="*50)
+        print("Анализ инвентаризационных данных")
+        print("="*50)
+
+        # Анализатор
+        start_time = time.time()
+        analyzer = InventoryAnalyzer(file_name)
+
+        # Кубик с детализацией по месяцам
+        cube = analyzer.create_cube(
+            dimensions=['Год', 'Месяц'],
+            measures=['Спрос', 'Продажи', 'Дефицит', 'Запас', 'Прибыль'],
+            agg_funcs=['sum']
+        )
+
+        # Параметры управления запасами
+        MAX_STOCK = 150  # Максимальный запас
+        REORDER_POINT = 50  # Точка восстановления
+
+        # Симуляция ограниченного запаса
+        with tqdm(total=6, desc="Моделирование управления запасами") as pbar:
+            cube['Запас_ограниченный'] = cube['Запас_sum'].clip(upper=MAX_STOCK)
+            pbar.update(1)
+
+            # Моделирование процесса восстановления запаса
+            cube['Нужен_заказ'] = cube['Запас_ограниченный'] < REORDER_POINT
+            pbar.update(1)
+            cube['Запас_после_заказа'] = np.where(
+                cube['Нужен_заказ'],
+                MAX_STOCK,  # Если запас ниже точки - пополняем до максимума
+                cube['Запас_ограниченный']
+            )
+            pbar.update(1)
+
+            # Расчет новых показателей
+            cube['Продажи_новые'] = np.minimum(cube['Спрос_sum'], cube['Запас_после_заказа'])
+            pbar.update(1)
+            cube['Дефицит_новый'] = np.maximum(cube['Спрос_sum'] - cube['Запас_после_заказа'], 0)
+            pbar.update(1)
+            cube['Прибыль_новая'] = cube['Продажи_новые'] * 10
+            cube['Потери_прибыли'] = cube['Прибыль_sum'] - cube['Прибыль_новая']
+            pbar.update(1)
+
+        # Анализ результатов
+        with tqdm(total=2, desc="Анализ результатов") as pbar:
+            total_impact = pd.DataFrame({
+                'Исходная прибыль': cube['Прибыль_sum'].sum(),
+                'Новая прибыль': cube['Прибыль_новая'].sum(),
+                'Общие потери': cube['Потери_прибыли'].sum(),
+                'Периоды с дефицитом': (cube['Дефицит_новый'] > 0).sum(),
+                'Периоды с заказом': cube['Нужен_заказ'].sum()
+            }, index=['Итог'])
+
+            print("\nОбщее влияние ограничения запаса:")
+            display(total_impact)
+            pbar.update(1)
+
+            # Проблемные периоды
+            problem_periods = cube[
+                (cube['Дефицит_новый'] > 0) |
+                (cube['Нужен_заказ'])
+            ].sort_values('Потери_прибыли', ascending=False)
+
+            print("\nТоп-5 проблемных периодов:")
+            display(problem_periods.head(5)[[
+                'Спрос_sum', 'Запас_sum', 'Запас_после_заказа',
+                'Дефицит_новый', 'Прибыль_sum', 'Прибыль_новая', 'Потери_прибыли'
+            ]])
+            pbar.update(1)
+
+        # Визуализация
+        with tqdm(total=1, desc="Визуализация результатов") as pbar:
+            plt.figure(figsize=(14, 10))
+
+            # График прибыли
+            plt.subplot(3, 1, 1)
+            cube['Прибыль_sum'].plot(label='Исходная прибыль', color='blue')
+            cube['Прибыль_новая'].plot(label='При ограничении запаса', color='orange', linestyle='--')
+            plt.title('Сравнение прибыли')
+            plt.ylabel('Прибыль ($)')
+            plt.legend()
+
+            # График запаса
+            plt.subplot(3, 1, 2)
+            cube['Запас_sum'].plot(label='Фактический запас', color='green')
+            cube['Запас_после_заказа'].plot(label='Запас после заказа', color='purple', linestyle=':')
+            plt.axhline(MAX_STOCK, color='red', linestyle='--', label='Макс. запас (150)')
+            plt.axhline(REORDER_POINT, color='gray', linestyle='-.', label='Точка заказа (50)')
+            plt.title('Динамика запасов')
+            plt.ylabel('Единицы')
+            plt.legend()
+
+            # График дефицита
+            plt.subplot(3, 1, 3)
+            cube['Дефицит_sum'].plot(label='Исходный дефицит', color='blue')
+            cube['Дефицит_новый'].plot(label='Новый дефицит', color='red')
+            plt.title('Сравнение дефицита')
+            plt.ylabel('Единицы')
+            plt.legend()
+
+            plt.tight_layout()
+            plt.show()
+            pbar.update(1)
+
+        print(f"\nВесь анализ выполнен за {time.time() - start_time:.2f} секунд")
+
+    except Exception as e:
+        print(f"\nОшибка: {str(e)}")
